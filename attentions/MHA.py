@@ -28,17 +28,17 @@ class MultiHeadAttention(nn.Module):
         query_states = (
             self.q_proj(x) # (Batch, seq_len, d_model) --> (Batch, seq_len, d_model)
             .view(x.shape[0], x.shape[1], self.num_heads, self.head_dim) # (Batch, seq_len, d_model) --> (Batch, seq_len, num_heads, head_dim)
-            .transpose(1, 2) # (Batch, seq_len, num_heads, head_dim) --> (Batch, c, seq_len, head_dim)
+            .transpose(1, 2) # Reshape to match attention (Batch, seq_len, num_heads, head_dim) --> (Batch, c, seq_len, head_dim)
         )
         key_states = (
             self.k_proj(x) # (Batch, seq_len, d_model) --> (Batch, seq_len, d_model)
             .view(x.shape[0], x.shape[1], self.num_heads, self.head_dim) # (Batch, seq_len, d_model) --> (Batch, seq_len, num_heads, head_dim)
-            .transpose(1, 2) # (Batch, seq_len, num_heads, head_dim) --> (Batch, c, seq_len, head_dim)
+            .transpose(1, 2) # Reshape to match attention (Batch, seq_len, num_heads, head_dim) --> (Batch, c, seq_len, head_dim)
         )
         value_states = (
             self.v_proj(x) # (Batch, seq_len, d_model) --> (Batch, seq_len, d_model)
             .view(x.shape[0], x.shape[1], self.num_heads, self.head_dim) # (Batch, seq_len, d_model) --> (Batch, seq_len, num_heads, head_dim)
-            .transpose(1, 2) # (Batch, seq_len, num_heads, head_dim) --> (Batch, c, seq_len, head_dim)
+            .transpose(1, 2) # Reshape to match attention (Batch, seq_len, num_heads, head_dim) --> (Batch, c, seq_len, head_dim)
         )
 
         # Apply RoPE
