@@ -41,7 +41,7 @@ class MultiHeadAttention(nn.Module):
             .transpose(1, 2) # (Batch, seq_len, num_heads, head_dim) --> (Batch, c, seq_len, head_dim)
         )
 
-        # RoPE
+        # Apply RoPE
         query_states = apply_rope(query_states)
         key_states = apply_rope(key_states)
         
