@@ -2,6 +2,12 @@ import torch
 from torch import nn
 from typing import Optional
 
+def apply_rope(x: torch.Tensor):
+    pass
+
+def update_kv_cache(key_states: torch.Tensor, value_states: torch.Tensor):
+    pass
+
 class MultiHeadAttention(nn.Module):
     def __init__(self, d_model: int, num_heads: int, use_cache: Optional[bool] = False):
         super().__init__()
@@ -34,4 +40,8 @@ class MultiHeadAttention(nn.Module):
             .view(x.shape[0], x.shape[1], self.num_heads, self.head_dim) # (Batch, seq_len, d_model) --> (Batch, seq_len, num_heads, head_dim)
             .transpose(1, 2) # (Batch, seq_len, num_heads, head_dim) --> (Batch, c, seq_len, head_dim)
         )
+
+        # RoPE
+        query_states = apply_rope(query_states)
+        key_states = apply_rope(key_states)
         
