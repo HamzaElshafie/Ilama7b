@@ -6,15 +6,14 @@ from typing import Optional
 def apply_rope(x: torch.Tensor):
     pass
 
-def update_kv_cache(key_states: torch.Tensor, value_states: torch.Tensor):
-    pass
-
 class MultiHeadAttention(nn.Module):
     def __init__(self, d_model: int, num_heads: int, use_cache: Optional[bool] = False):
         super().__init__()
         self.d_model = d_model
         self.num_heads = num_heads
         self.use_cache = use_cache
+        self.k_cache = None
+        self.v_cache = None
 
         assert d_model % num_heads == 0, "d_model is not divisible by num_heads"
 
@@ -25,6 +24,16 @@ class MultiHeadAttention(nn.Module):
         self.k_proj = nn.Linear(d_model, d_model)
         self.v_proj = nn.Linear(d_model, d_model)
         self.o_proj = nn.Linear(d_model, d_model)
+    
+    def update_kv_cache(self, key_states: torch.Tensor, value_states: torch.Tensor):
+        if self.k_cache is None:
+            self.k_cache = key_states
+            self.v_cache = value_states
+        else:
+            self.k_cache = torch.cat([self.k_cache, key_states], dim=-2)
+            self.v_cache = torch.cat([self.v_cache, value_states], dim=-2)
+        
+        return self.k_cache, self.v_cache
     
     def attention(self, query_states, key_states, value_states, causal_mask: Optional[torch.Tensor] = None):
         attention_scores = query_states @ key_states.transpose(-2, -1) * self.scale # (Batch, num_heads, seq_len, seq_len)
@@ -37,7 +46,7 @@ class MultiHeadAttention(nn.Module):
         return attention_scores @ value_states
 
     def forward(self, x: torch.Tensor, causal_mask: Optional[torch.Tensor] = None):
-        batch, seq_len, d_model = x.shape
+        batch, seq_len, _ = x.shape
 
         query_states = (
             self.q_proj(x) # (Batch, seq_len, d_model) --> (Batch, seq_len, d_model)
@@ -61,7 +70,7 @@ class MultiHeadAttention(nn.Module):
 
         if self.use_cache:
             # Update KV cache and get full tensors for attention
-            key_states, value_states = update_kv_cache(key_states, value_states)
+            key_states, value_states = self.update_kv_cache(key_states, value_states)
 
         x = self.attention(query_states, key_states, value_states, causal_mask) # (Batch, num_heads, seq_len, head_dim)
 
