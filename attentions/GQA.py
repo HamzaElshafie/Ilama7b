@@ -6,24 +6,26 @@ from typing import Optional
 def apply_rope(x: torch.Tensor):
     return x
 
-class MultiQueryAttention(nn.Module):
-    def __init__(self, d_model: int, num_heads: int, use_cache: Optional[bool] = False):
+class GroupedQueryAttention(nn.Module):
+    def __init__(self, d_model: int, num_heads: int, num_kv_heads: int, use_cache: Optional[bool] = False):
         super().__init__()
         self.d_model = d_model
         self.num_heads = num_heads
+        self.num_kv_heads = num_kv_heads
+        self.num_groups = num_heads // num_kv_heads
         self.use_cache = use_cache
         self.k_cache = None
         self.v_cache = None
-
+        
+        assert num_heads % num_kv_heads == 0, "num_heads is not divisble by num_kv_heads"
         assert d_model % num_heads == 0, "d_model is not divisible by num_heads"
 
         self.head_dim  = d_model // num_heads
         self.scale = 1 / math.sqrt(self.head_dim)
 
         self.q_proj = nn.Linear(d_model, d_model)
-        # Only one kv for all heads
-        self.k_proj = nn.Linear(d_model, self.head_dim)
-        self.v_proj = nn.Linear(d_model, self.head_dim)
+        self.k_proj = nn.Linear(d_model, self.head_dim * self.num_kv_heads)
+        self.v_proj = nn.Linear(d_model, self.head_dim * self.num_kv_heads)
         self.o_proj = nn.Linear(d_model, d_model)
     
     def update_kv_cache(self, key_states: torch.Tensor, value_states: torch.Tensor):
@@ -58,8 +60,17 @@ class MultiQueryAttention(nn.Module):
             .transpose(1, 2) # Reshape to match attention (Batch, seq_len, num_heads, head_dim) --> (Batch, num_heads, seq_len, head_dim)
         )
 
-        key_states = self.k_proj(x).unsqueeze(1) # (Batch, seq_len, d_model) --> (Batch, 1, seq_len, head_dim)
-        value_states = self.v_proj(x).unsqueeze(1) # (Batch, seq_len, d_model) --> (Batch, 1, seq_len, head_dim)
+        key_states = (
+            self.k_proj(x)
+            .view(batch, seq_len, self.num_kv_heads, self.head_dim)
+            .transpose(1, 2)
+        )
+
+        value_states = (
+            self.v_proj(x)
+            .view(batch, seq_len, self.num_kv_heads, self.head_dim)
+            .transpose(1, 2)
+        )
 
         # Apply RoPE
         query_states = apply_rope(query_states)
@@ -69,6 +80,19 @@ class MultiQueryAttention(nn.Module):
             # Update KV cache and get full tensors for attention
             key_states, value_states = self.update_kv_cache(key_states, value_states)
 
+        # Expand kv cache from (batch, num_kv_heads, seq_len, head_dim) --> (batch, num_kv_heads, num_groups, seq_len, head_dim) --> (batch, num_heads, seq_len, head_dim)
+        kv_len = self.k_cache.shape[-2]
+        key_states = (
+            key_states.unsqueeze(2)
+            .expand(batch, self.num_kv_heads, self.num_groups, kv_len, self.head_dim)
+            .reshape(batch, self.num_kv_heads * self.num_groups, kv_len, self.head_dim)
+        ) 
+        
+        value_states = (
+            value_states.unsqueeze(2)
+            .expand(batch, self.num_kv_heads, self.num_groups, kv_len, self.head_dim)
+            .reshape(batch, self.num_kv_heads * self.num_groups, kv_len, self.head_dim)
+        ) 
         # Calculate attention
         x = self.attention(query_states, key_states, value_states, causal_mask) # (Batch, num_heads, seq_len, head_dim)
 

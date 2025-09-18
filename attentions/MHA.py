@@ -4,7 +4,7 @@ from torch import nn
 from typing import Optional
 
 def apply_rope(x: torch.Tensor):
-    pass
+    return x
 
 class MultiHeadAttention(nn.Module):
     def __init__(self, d_model: int, num_heads: int, use_cache: Optional[bool] = False):
