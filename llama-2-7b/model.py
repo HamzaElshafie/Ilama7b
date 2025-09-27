@@ -10,7 +10,7 @@ class ModelArgs:
     dim: int = 4096
     n_layers: int = 32
     n_heads: int = 32 # Num heads for queries
-    n_kv_heads: Op tional[int] = None # Num heads for K and V
+    n_kv_heads: Optional[int] = None # Num heads for K and V
     vocab_size: int = -1 # This will be set when we load the tokenizer
     multiple_of: int = 256
     ffn_dim_multiplier: Optional[float] = None
@@ -21,6 +21,54 @@ class ModelArgs:
     max_seq_len: int = 2048
 
     device: str = None
+
+def precompute_theta_pos_frequencies(head_dim: int, seq_len: int, device: str, base: float = 10000.0):
+    """
+    Formula: θi = 1000^-2(i-1)/head_dim, where i = [1, 2, ..., head_dim/2]
+    Applied here as:  θi = 1 / 1000^2(i-1)/head_dim, where i = [1, 2, ..., head_dim/2]
+    """
+    assert head_dim % 2 == 0, "RoPE cannot be applied to head dim thats odd"
+
+    # Shape of theta params --> (head_dim / 2)
+    theta_numerator = torch.arange(0, head_dim, 2).float()
+    # Shape --> (head_dim / 2)
+    theta = 1 / base ** (theta_numerator / head_dim).to(device)
+    # Possible position "m" could be alot so we will give seq_len * 2 (for prompt)
+    # Shape --> (seq_len)
+    m = torch.arange(seq_len, device=device)
+    # Multiply each theta by each pos using outer product 
+    # Shape: (seq_len) ⊗ (head_dim / 2) --> (seq_len, head_dim / 2)
+    freqs = torch.outer(m, theta).float()
+    # We can compute tcomplex numbers in the polar form c = R * exp(i * m * theta), where R = 1
+    # (seq_len, head_dim / 2) --> (seq_len, head_dim / 2)
+    freqs_complex = torch.polar(torch.ones_like(freqs), freqs)
+    return freqs_complex
+
+def apply_rotary_embeddings(x: torch.Tensor, freqs_complex: torch.Tensor, device: str):
+    # Shape: (B, Seq_len, n_heads, head_dim)--> Shape: (B, Seq_len, n_heads, head_dim / 2)
+    x_complex = torch.view_as_complex(x.float().reshape(x.shape[0], x.shape[1], -1, 2))
+    # Shape: (Seq_len, head_dim / 2) --> (1, seq_len, 1, head_dim / 2). 1's for broadcasting
+    freqs_complex = freqs_complex.unsqueeze(0).unsqueeze(2)
+    # Shape: (B, seq_len, n_heads, head_dim / 2) * (1, seq_len, 1, head_dim / 2) --> (B, seq_len, n_heads, head_dim / 2)
+    x_rotated = x_complex * freqs_complex
+    # Shape: (B, seq_len, n_heads, head_dim / 2) --> (B, seq_len, n_heads, head_dim / 2, 2)
+    x_out = torch.view_as_real(x_rotated)
+    # Shape: (B, seq_len, n_heads, head_dim / 2, 2) --> (B, seq_len, n_heads, head_dim)
+    x.out = x_out.flatten(*x.shape)
+    return x_out.type_as(x).to(device)
+
+class RMSNorm(nn.module):
+    def __init__(self, dim: int, eps: float):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def _norm(self, x: torch.Tensor):
+        # Shape: (B, Seq_len, Dim) # hint: see first input to first decoder block
+        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+    
+    def forward(self, x: torch.Tensor):
+        return self.weight * self._norm(x.float()).type_as(x)
 
 class Transformer(nn.Module):
     def __init__(self, args: ModelArgs) -> None:
