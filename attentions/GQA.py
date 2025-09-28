@@ -52,7 +52,8 @@ class GroupedQueryAttention(nn.Module):
         return attention_scores @ value_states
 
     def forward(self, x: torch.Tensor, causal_mask: Optional[torch.Tensor] = None):
-        batch, seq_len, _, = x.shape
+        batch, seq_len, _, = x.shape # (N, 1, Dim)
+        
 
         query_states = (
             self.q_proj(x) # (Batch, seq_len, d_model) --> (Batch, seq_len, d_model)
