@@ -39,7 +39,7 @@ def precompute_theta_pos_frequencies(head_dim: int, seq_len: int, device: str, b
     # Multiply each theta by each pos using outer product 
     # Shape: (seq_len) ⊗ (head_dim / 2) --> (seq_len, head_dim / 2)
     freqs = torch.outer(m, theta).float()
-    # We can compute tcomplex numbers in the polar form c = R * exp(i * m * theta), where R = 1
+    # We can compute complex numbers in the polar form c = R * exp(i * m * theta), where R = 1
     # (seq_len, head_dim / 2) --> (seq_len, head_dim / 2)
     freqs_complex = torch.polar(torch.ones_like(freqs), freqs)
     return freqs_complex
@@ -54,7 +54,7 @@ def apply_rotary_embeddings(x: torch.Tensor, freqs_complex: torch.Tensor, device
     # Shape: (B, seq_len, n_heads, head_dim / 2) --> (B, seq_len, n_heads, head_dim / 2, 2)
     x_out = torch.view_as_real(x_rotated)
     # Shape: (B, seq_len, n_heads, head_dim / 2, 2) --> (B, seq_len, n_heads, head_dim)
-    x.out = x_out.flatten(*x.shape)
+    x.out = x_out.reshape(*x.shape)
     return x_out.type_as(x).to(device)
 
 def repeat_kv(x: torch.Tensor, n_groups: int):
@@ -67,7 +67,7 @@ def repeat_kv(x: torch.Tensor, n_groups: int):
         x = x.unsqueeze(2).expand(batch_size, n_kv_heads, n_groups, seq_len, head_dim)
         return x.reshape(batch_size, n_kv_heads * n_groups, seq_len, head_dim)
 
-class RMSNorm(nn.module):
+class RMSNorm(nn.Module):
     def __init__(self, dim: int, eps: float):
         super().__init__()
         self.eps = eps
@@ -79,7 +79,38 @@ class RMSNorm(nn.module):
     
     def forward(self, x: torch.Tensor):
         return self.weight * self._norm(x.float()).type_as(x)
+    
+class FeedForward(nn.Module):
+    def __init__(self, args: ModelArgs):
+        super().__init__()
 
+        self.dim = args.dim
+        self.hidden_dim = 4 * self.dim
+        self.hidden_dim = int(2 * self.hidden_dim / 3)
+        self.multiple_of = args.multiple_of
+
+        if args.ffn_dim_multiplier is not None:
+            self.hidden_dim = int(args.ffn_dim_multiplier * self.hidden_dim)
+
+        # Round the hidden_dim to the nearest multiple_of param 
+        self.hidden_dim = self.multiple_of * (
+            self.hidden_dim * ((self.hidden_dim + self.multiple_of - 1) // self.multiple_of))
+        
+        self.W = nn.Linear(self.dim, self.hidden_dim, bias=False)
+        self.V = nn.Linear(self.dim, self.hidden_dim, bias=False)
+        self.Wo = nn.Linear(self.hidden_dim, self.dim, bias=False)
+
+    def forward(self, x: torch.Tensor):
+        # (B, Seq_len, dim) --> (B, Seq_len, hidden_dim)
+        a = self.W(x)
+        # (B, Seq_len, hidden_dim)
+        g = F.silu(a)
+        # (B, Seq_len, dim) --> (B, Seq_len, hidden_dim)
+        b = self.V(x)
+        h = g * b
+        # (B, Seq_len, hidden_dim) --> (B, Seq_len, dim) 
+        return self.Wo(h)
+    
 class SelfAttention(nn.Module):
     def __init__(self, args: ModelArgs):
         super().__init__()
@@ -96,7 +127,7 @@ class SelfAttention(nn.Module):
         self.n_groups = self.n_heads_q // self.n_kv_heads
         # Indicates the dimension of each head
         self.head_dim = args.dim // self.n_heads
-        self.scale = 1 / math.sqrt(self.h_dim)
+        self.scale = 1 / math.sqrt(self.head_dim)
 
         self.q_proj = nn.Linear(args.dim, self.head_dim * args.n_heads, bias=False)
         self.k_proj = nn.Linear(args.dim, self.n_kv_heads * self.head_dim, bias=False)
@@ -222,13 +253,13 @@ class Transformer(nn.Module):
 
         """
         # (B, Seq_len)
-        batch_size, seq_len = tokens.shape
+        _, seq_len = tokens.shape
         assert seq_len == 1, "Only one token a time can be processed"
 
         # (B, Seq_len) --> # (B, Seq_len, Dim)
         h = self.tok_embeddings(tokens)
 
-        # Retrieve the pairs (m, theta) corresponding to te positions [start_pos, start_pos + seq_len]
+        # Retrieve the pairs (m, theta) corresponding to the positions [start_pos, start_pos + seq_len]
         freqs_complex = self.freqs_complex[start_pos:start_pos + seq_len]
 
         # Consecutively apply all the decoder layers
