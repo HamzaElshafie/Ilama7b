@@ -1,1 +1,1 @@
-LLama 70B architecture
+LLama 7B architecture (with GQA instead)
